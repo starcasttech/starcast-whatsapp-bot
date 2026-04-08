@@ -1,4 +1,4 @@
-from db import get_session, set_session, save_submission
+from db import get_session, set_session, save_submission, get_client_by_phone, verify_client, update_client_details
 from notify import notify
 
 # ── Menu text ──────────────────────────────────────────────────────────────
@@ -9,8 +9,9 @@ WELCOME = (
     "1️⃣  Technical Support\n"
     "2️⃣  Get a Quote\n"
     "3️⃣  General Question\n"
-    "4️⃣  Sign Up\n\n"
-    "Reply with a number (1-4)"
+    "4️⃣  Sign Up\n"
+    "5️⃣  My Account\n\n"
+    "Reply with a number (1-5)"
 )
 
 FIBRE_MENU = (
@@ -86,6 +87,10 @@ def handle_message(phone, body):
         "SIGNUP_CONNTYPE":        _signup_conntype,
         "SIGNUP_FIBRE_PROVIDER":  _signup_fibre_provider,
         "SIGNUP_LTE_PROVIDER":    _signup_lte_provider,
+        "ACCOUNT_VERIFY_ID":      _account_verify_id,
+        "ACCOUNT_MENU":           _account_menu,
+        "ACCOUNT_UPDATE_NAME":    _account_update_name,
+        "ACCOUNT_UPDATE_EMAIL":   _account_update_email,
         "DONE":                   _done,
     }
 
@@ -116,8 +121,22 @@ def _menu(phone, text, data):
     elif text == "4":
         set_session(phone, "SIGNUP_FIRSTNAME", {})
         return "🚀 *Sign Up for Starcast Internet*\n\nLet's get you connected! What is your *first name*?"
+    elif text == "5":
+        client = get_client_by_phone(phone)
+        if not client:
+            set_session(phone, "DONE", {})
+            return (
+                "🔍 *My Account*\n\n"
+                "We could not find an account linked to this number.\n"
+                "Please contact us at starcast.tech@gmail.com or type *hi* for the main menu."
+            )
+        set_session(phone, "ACCOUNT_VERIFY_ID", {})
+        return (
+            "🔐 *My Account — Identity Verification*\n\n"
+            "To protect your account, please enter your *ID number*."
+        )
     else:
-        return "Please reply with a number 1-4.\n\n" + WELCOME
+        return "Please reply with a number 1-5.\n\n" + WELCOME
 
 def _support_describe(phone, text, data):
     data["issue"] = text
@@ -246,3 +265,80 @@ def _complete_signup(phone, data):
         f"<b>Address:</b> {data.get('address', '')}\n"
         f"<b>Connection:</b> {data.get('conn_type', '')} / {data.get('provider', '')}"
     )
+
+
+# ── Account check handlers ─────────────────────────────────────────────────
+
+_ACCOUNT_MENU_TEXT = (
+    "What would you like to do?\n\n"
+    "1️⃣  View my account details\n"
+    "2️⃣  Update my name\n"
+    "3️⃣  Update my email\n"
+    "0️⃣  Main menu\n\n"
+    "Reply with a number"
+)
+
+def _account_verify_id(phone, text, data):
+    client = verify_client(phone, text)
+    if not client:
+        # Give them one more chance then bail
+        attempts = data.get("attempts", 0) + 1
+        if attempts >= 2:
+            set_session(phone, "DONE", {})
+            return (
+                "❌ ID number did not match our records.\n"
+                "Please contact us at starcast.tech@gmail.com\n\n"
+                "Type *hi* to start again."
+            )
+        set_session(phone, "ACCOUNT_VERIFY_ID", {"attempts": attempts})
+        return "❌ That ID number doesn't match our records. Please try again."
+    # Verified — store client phone in session for subsequent steps
+    set_session(phone, "ACCOUNT_MENU", {"verified_phone": phone})
+    status = "✅ Paid" if client["paid"] else "⚠️ Unpaid"
+    return (
+        f"✅ *Identity verified!*\n\n"
+        f"Welcome, {client['name'].split()[0]}!\n\n"
+        f"📦 Package: {client['package_amt']}/month\n"
+        f"💳 Status:  {status}\n\n"
+        + _ACCOUNT_MENU_TEXT
+    )
+
+def _account_menu(phone, text, data):
+    client = get_client_by_phone(phone)
+    if not client:
+        set_session(phone, "DONE", {})
+        return WELCOME
+
+    if text == "1":
+        status = "✅ Paid" if client["paid"] else "⚠️ Unpaid — please make your payment"
+        return (
+            f"👤 *Account Details*\n\n"
+            f"Name:    {client['name']}\n"
+            f"Email:   {client['email'] or 'not on file'}\n"
+            f"Package: {client['package_amt']}/month\n"
+            f"Status:  {status}\n\n"
+            + _ACCOUNT_MENU_TEXT
+        )
+    elif text == "2":
+        set_session(phone, "ACCOUNT_UPDATE_NAME", data)
+        return "Please type your updated *full name*:"
+    elif text == "3":
+        set_session(phone, "ACCOUNT_UPDATE_EMAIL", data)
+        return "Please type your updated *email address*:"
+    elif text == "0":
+        set_session(phone, "MENU", {})
+        return WELCOME
+    else:
+        return "Please reply with 1, 2, 3 or 0.\n\n" + _ACCOUNT_MENU_TEXT
+
+def _account_update_name(phone, text, data):
+    update_client_details(phone, name=text)
+    notify(f"✏️ <b>[ACCOUNT]</b> Name updated for {phone}\n<b>New name:</b> {text}")
+    set_session(phone, "ACCOUNT_MENU", data)
+    return f"✅ Name updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT
+
+def _account_update_email(phone, text, data):
+    update_client_details(phone, email=text)
+    notify(f"✏️ <b>[ACCOUNT]</b> Email updated for {phone}\n<b>New email:</b> {text}")
+    set_session(phone, "ACCOUNT_MENU", data)
+    return f"✅ Email updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT
