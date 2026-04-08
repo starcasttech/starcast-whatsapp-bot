@@ -1,4 +1,6 @@
-from db import get_session, set_session, save_submission, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone
+from db import get_session, set_session, save_submission, get_all_submissions, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone
+
+ADMIN_PHONES = {"+27815082450"}  # Leonard — add more if needed
 from notify import notify
 
 # ── Menu text ──────────────────────────────────────────────────────────────
@@ -29,6 +31,37 @@ LTE_MENU = (
     "2️⃣  Vodacom\n"
     "3️⃣  Telkom\n\n"
     "Reply with a number (1-3)"
+)
+
+QUOTE_MENU = (
+    "📋 *Get a Quote*\n\n"
+    "What are you interested in?\n\n"
+    "1️⃣  Fibre Internet\n"
+    "2️⃣  LTE / Mobile Internet\n"
+    "3️⃣  CCTV & Security Cameras\n"
+    "4️⃣  Gate & Garage Automation\n\n"
+    "Reply with a number (1-4)"
+)
+
+FIBRE_PROVIDER_MENU = (
+    "Which fibre network is in your area?\n\n"
+    "1️⃣  Octotel\n"
+    "2️⃣  Openserve\n"
+    "3️⃣  Frogfoot\n"
+    "4️⃣  Vuma\n"
+    "5️⃣  MetroFibre\n"
+    "6️⃣  Zoomfibre\n"
+    "7️⃣  Not sure\n\n"
+    "Reply with a number (1-7)"
+)
+
+LTE_PROVIDER_MENU = (
+    "Which LTE network do you prefer?\n\n"
+    "1️⃣  MTN\n"
+    "2️⃣  Vodacom\n"
+    "3️⃣  Telkom\n"
+    "4️⃣  Not sure — best in my area\n\n"
+    "Reply with a number (1-4)"
 )
 
 CONN_MENU = (
@@ -77,6 +110,10 @@ def handle_message(phone, body):
     text  = body.strip()
     state, data = get_session(phone)
 
+    # Admin command — Leonard only
+    if text.lower() == "!tasks":
+        return _admin_tasks(phone)
+
     # Reset keywords always work
     if text.lower() in ("hi", "hello", "hey", "menu", "start", "0"):
         set_session(phone, "MENU", {})
@@ -88,10 +125,19 @@ def handle_message(phone, body):
         "SUPPORT_TYPE":           _support_type,
         "SUPPORT_DESCRIBE":       _support_describe,
         "SUPPORT_VERIFY_ID":      _support_verify_id,
-        "QUOTE_TYPE":             _quote_type,
+        "QUOTE_MENU":             _quote_menu,
+        "QUOTE_TYPE":             _quote_menu,        # legacy alias
+        "QUOTE_ADDRESS":          _quote_address,
         "QUOTE_FIBRE_PROVIDER":   _quote_fibre_provider,
         "QUOTE_LTE_PROVIDER":     _quote_lte_provider,
-        "QUOTE_ADDRESS":          _quote_address,
+        "QUOTE_FIRSTNAME":        _quote_firstname,
+        "QUOTE_SURNAME":          _quote_surname,
+        "QUOTE_PHONE":            _quote_phone,
+        "SECURITY_FIRSTNAME":     _security_firstname,
+        "SECURITY_SURNAME":       _security_surname,
+        "SECURITY_PHONE":         _security_phone,
+        "SECURITY_EMAIL":         _security_email,
+        "SECURITY_DESCRIBE":      _security_describe,
         "GENERAL_QUESTION":       _general_question,
         "SIGNUP_FIRSTNAME":       _signup_firstname,
         "SIGNUP_SURNAME":         _signup_surname,
@@ -128,8 +174,8 @@ def _menu(phone, text, data):
         set_session(phone, "SUPPORT_TYPE", {})
         return SUPPORT_MENU
     elif text == "2":
-        set_session(phone, "QUOTE_TYPE", {})
-        return "📋 *Get a Quote*\n\n" + CONN_MENU
+        set_session(phone, "QUOTE_MENU", {})
+        return QUOTE_MENU
     elif text == "3":
         set_session(phone, "GENERAL_QUESTION", {})
         return "💬 *General Question*\n\nPlease type your question."
@@ -229,47 +275,114 @@ def _general_question(phone, text, data):
     set_session(phone, "DONE", {})
     return DONE_MSG
 
-def _quote_type(phone, text, data):
+# ── Quote handlers ─────────────────────────────────────────────────────────
+
+def _quote_menu(phone, text, data):
     if text == "1":
-        data["conn_type"] = "Fibre"
+        data["quote_type"] = "Fibre Internet"
         set_session(phone, "QUOTE_FIBRE_PROVIDER", data)
-        return "Which fibre network covers your area?\n\n" + FIBRE_MENU
+        return FIBRE_PROVIDER_MENU
     elif text == "2":
-        data["conn_type"] = "LTE"
+        data["quote_type"] = "LTE Internet"
         set_session(phone, "QUOTE_LTE_PROVIDER", data)
-        return LTE_MENU
-    else:
-        return "Please reply 1 for Fibre or 2 for LTE.\n\n" + CONN_MENU
+        return LTE_PROVIDER_MENU
+    elif text == "3":
+        data["quote_type"] = "CCTV & Security"
+        set_session(phone, "SECURITY_FIRSTNAME", data)
+        return "📷 *CCTV & Security Quote*\n\nWhat is your *first name*?"
+    elif text == "4":
+        data["quote_type"] = "Gate & Garage Automation"
+        set_session(phone, "SECURITY_FIRSTNAME", data)
+        return "🔧 *Gate & Garage Automation Quote*\n\nWhat is your *first name*?"
+    return "Please reply with a number 1-4.\n\n" + QUOTE_MENU
 
 def _quote_fibre_provider(phone, text, data):
-    providers = {"1": "Openserve", "2": "Frogfoot", "3": "Octotel", "4": "Check Coverage"}
-    if text in providers:
-        if text == "4":
-            set_session(phone, "DONE", {})
-            return COVERAGE_MSG
-        data["provider"] = providers[text]
-        set_session(phone, "QUOTE_ADDRESS", data)
-        return "📍 What is your *physical address*? (Street, suburb, city)"
-    return "Please reply with a number 1-4.\n\n" + FIBRE_MENU
+    providers = {"1": "Octotel", "2": "Openserve", "3": "Frogfoot",
+                 "4": "Vuma", "5": "MetroFibre", "6": "Zoomfibre", "7": "Not sure"}
+    if text not in providers:
+        return "Please reply with a number 1-7.\n\n" + FIBRE_PROVIDER_MENU
+    data["provider"] = providers[text]
+    set_session(phone, "QUOTE_ADDRESS", data)
+    return "📍 What is your *physical address*? (Street, suburb, city)"
 
 def _quote_lte_provider(phone, text, data):
-    providers = {"1": "MTN", "2": "Vodacom", "3": "Telkom"}
-    if text in providers:
-        data["provider"] = providers[text]
-        set_session(phone, "QUOTE_ADDRESS", data)
-        return "📍 What is your *physical address*? (Street, suburb, city)"
-    return "Please reply with a number 1-3.\n\n" + LTE_MENU
+    providers = {"1": "MTN", "2": "Vodacom", "3": "Telkom", "4": "Not sure"}
+    if text not in providers:
+        return "Please reply with a number 1-4.\n\n" + LTE_PROVIDER_MENU
+    data["provider"] = providers[text]
+    set_session(phone, "QUOTE_ADDRESS", data)
+    return "📍 What is your *physical address*? (Street, suburb, city)"
 
 def _quote_address(phone, text, data):
     data["address"] = text
+    set_session(phone, "QUOTE_FIRSTNAME", data)
+    return "What is your *first name*?"
+
+def _quote_firstname(phone, text, data):
+    data["first_name"] = text
+    set_session(phone, "QUOTE_SURNAME", data)
+    return "What is your *surname*?"
+
+def _quote_surname(phone, text, data):
+    data["surname"] = text
+    set_session(phone, "QUOTE_PHONE", data)
+    return "What is your *cell number*? A consultant will call you back."
+
+def _quote_phone(phone, text, data):
+    data["contact_number"] = text
     save_submission(phone, "quote", data)
     notify(
-        f"📋 <b>[QUOTE]</b> Quote request from {phone}\n\n"
-        f"<b>Connection:</b> {data.get('conn_type', '?')} / {data.get('provider', '?')}\n"
-        f"<b>Address:</b> {text}"
+        f"📋 <b>[QUOTE — {data.get('quote_type','Internet')}]</b>\n\n"
+        f"<b>Name:</b> {data.get('first_name','')} {data.get('surname','')}\n"
+        f"<b>Provider:</b> {data.get('provider','?')}\n"
+        f"<b>Address:</b> {data.get('address','?')}\n"
+        f"<b>Call back:</b> {text}"
     )
     set_session(phone, "DONE", {})
-    return DONE_MSG
+    return (
+        "✅ *Quote request received!*\n\n"
+        "A Starcast consultant will call you back as soon as possible.\n\n"
+        "Type *hi* to start again."
+    )
+
+# ── Security / Automation quote handlers ───────────────────────────────────
+
+def _security_firstname(phone, text, data):
+    data["first_name"] = text
+    set_session(phone, "SECURITY_SURNAME", data)
+    return "What is your *surname*?"
+
+def _security_surname(phone, text, data):
+    data["surname"] = text
+    set_session(phone, "SECURITY_PHONE", data)
+    return "What is your *cell number*?"
+
+def _security_phone(phone, text, data):
+    data["contact_number"] = text
+    set_session(phone, "SECURITY_EMAIL", data)
+    return "What is your *email address*?"
+
+def _security_email(phone, text, data):
+    data["email"] = text
+    set_session(phone, "SECURITY_DESCRIBE", data)
+    return "Please *describe what you need* (e.g. number of cameras, location, gate type, etc.):"
+
+def _security_describe(phone, text, data):
+    data["description"] = text
+    save_submission(phone, "security_quote", data)
+    notify(
+        f"🔒 <b>[QUOTE — {data.get('quote_type','Security')}]</b>\n\n"
+        f"<b>Name:</b> {data.get('first_name','')} {data.get('surname','')}\n"
+        f"<b>Cell:</b> {data.get('contact_number','?')}\n"
+        f"<b>Email:</b> {data.get('email','?')}\n"
+        f"<b>Description:</b> {text}"
+    )
+    set_session(phone, "DONE", {})
+    return (
+        "✅ *Quote request received!*\n\n"
+        "A Starcast consultant will get back to you as soon as possible.\n\n"
+        "Type *hi* to start again."
+    )
 
 def _signup_firstname(phone, text, data):
     data["first_name"] = text
@@ -479,3 +592,41 @@ def _account_cancel(phone, text, data):
     else:
         set_session(phone, "ACCOUNT_MENU", data)
         return "No problem — your service continues as normal.\n\n" + _ACCOUNT_MENU_TEXT
+
+
+# ── Admin task list ────────────────────────────────────────────────────────
+
+def _admin_tasks(phone):
+    from db import _clean_phone
+    clean = _clean_phone(phone)
+    if clean not in ADMIN_PHONES:
+        return "Unknown command."
+
+    subs = get_all_submissions()
+    if not subs:
+        return "✅ No pending submissions."
+
+    # Group by type, show last 20
+    recent = subs[:20]
+    _type_icons = {
+        "support":        "🛠",
+        "quote":          "📋",
+        "security_quote": "🔒",
+        "general":        "💬",
+        "signup":         "🚀",
+        "move_request":   "📍",
+        "cancel_request": "🚨",
+    }
+    lines = [f"📋 *Pending Tasks* — {len(subs)} total\n"]
+    for s in recent:
+        icon = _type_icons.get(s["type"], "📌")
+        d = s["data"]
+        name = d.get("name") or f"{d.get('first_name','')} {d.get('surname','')}".strip() or s["phone"]
+        detail = (
+            d.get("issue_type") or d.get("quote_type") or
+            d.get("description","")[:40] or d.get("question","")[:40]
+        )
+        date = s["created_at"][:10]
+        lines.append(f"{icon} *{s['type'].replace('_',' ').title()}* — {name}\n   {detail} ({date})")
+
+    return "\n\n".join(lines)
