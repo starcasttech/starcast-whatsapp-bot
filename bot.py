@@ -1,4 +1,4 @@
-from db import get_session, set_session, save_submission, get_client_by_phone, get_client_by_id, verify_client, update_client_details
+from db import get_session, set_session, save_submission, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone
 from notify import notify
 
 # ── Menu text ──────────────────────────────────────────────────────────────
@@ -89,8 +89,10 @@ def handle_message(phone, body):
         "SIGNUP_LTE_PROVIDER":    _signup_lte_provider,
         "ACCOUNT_VERIFY_ID":      _account_verify_id,
         "ACCOUNT_MENU":           _account_menu,
-        "ACCOUNT_UPDATE_NAME":    _account_update_name,
         "ACCOUNT_UPDATE_EMAIL":   _account_update_email,
+        "ACCOUNT_UPDATE_PHONE":   _account_update_phone,
+        "ACCOUNT_MOVE_LOCATION":  _account_move_location,
+        "ACCOUNT_CANCEL":         _account_cancel,
         "DONE":                   _done,
     }
 
@@ -264,8 +266,10 @@ def _complete_signup(phone, data):
 _ACCOUNT_MENU_TEXT = (
     "What would you like to do?\n\n"
     "1️⃣  View my account details\n"
-    "2️⃣  Update my name\n"
-    "3️⃣  Update my email\n"
+    "2️⃣  Update my email\n"
+    "3️⃣  Update my phone number\n"
+    "4️⃣  Request to move location\n"
+    "5️⃣  Cancel my service\n"
     "0️⃣  Main menu\n\n"
     "Reply with a number"
 )
@@ -330,23 +334,22 @@ def _account_menu(phone, text, data):
             + _ACCOUNT_MENU_TEXT
         )
     elif text == "2":
-        set_session(phone, "ACCOUNT_UPDATE_NAME", data)
-        return "Please type your updated *full name*:"
-    elif text == "3":
         set_session(phone, "ACCOUNT_UPDATE_EMAIL", data)
         return "Please type your updated *email address*:"
+    elif text == "3":
+        set_session(phone, "ACCOUNT_UPDATE_PHONE", data)
+        return "Please type your updated *cell number* (e.g. 0821234567 or +27821234567):"
+    elif text == "4":
+        set_session(phone, "ACCOUNT_MOVE_LOCATION", data)
+        return "📍 *Move Location Request*\n\nPlease type your *new address* (street, suburb, city) and we will check coverage and get back to you."
+    elif text == "5":
+        set_session(phone, "ACCOUNT_CANCEL", data)
+        return "⚠️ *Cancel Service*\n\nAre you sure you want to cancel? Type *YES* to confirm or *NO* to go back."
     elif text == "0":
         set_session(phone, "MENU", {})
         return WELCOME
     else:
         return "Please reply with 1, 2, 3 or 0.\n\n" + _ACCOUNT_MENU_TEXT
-
-def _account_update_name(phone, text, data):
-    client_phone = data.get("client_phone", phone)
-    update_client_details(client_phone, name=text)
-    notify(f"✏️ <b>[ACCOUNT]</b> Name updated for {client_phone}\n<b>New name:</b> {text}")
-    set_session(phone, "ACCOUNT_MENU", data)
-    return f"✅ Name updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT
 
 def _account_update_email(phone, text, data):
     client_phone = data.get("client_phone", phone)
@@ -354,3 +357,48 @@ def _account_update_email(phone, text, data):
     notify(f"✏️ <b>[ACCOUNT]</b> Email updated for {client_phone}\n<b>New email:</b> {text}")
     set_session(phone, "ACCOUNT_MENU", data)
     return f"✅ Email updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT
+
+def _account_update_phone(phone, text, data):
+    client_phone = data.get("client_phone", phone)
+    new_phone = update_client_phone(client_phone, text)
+    data["client_phone"] = new_phone
+    notify(f"✏️ <b>[ACCOUNT]</b> Phone updated for {client_phone}\n<b>New phone:</b> {new_phone}")
+    set_session(phone, "ACCOUNT_MENU", data)
+    return f"✅ Phone number updated to *{new_phone}*.\n\n" + _ACCOUNT_MENU_TEXT
+
+def _account_move_location(phone, text, data):
+    client_phone = data.get("client_phone", phone)
+    client = get_client_by_phone(client_phone)
+    save_submission(phone, "move_request", {"name": client["name"] if client else "", "new_address": text})
+    notify(
+        f"📍 <b>[MOVE REQUEST]</b> from {client['name'] if client else phone}\n\n"
+        f"<b>New address:</b> {text}\n"
+        f"<b>Current service:</b> {', '.join(s['name'] for s in (client.get('services') or []))}"
+    )
+    set_session(phone, "ACCOUNT_MENU", data)
+    return (
+        "✅ *Move request received!*\n\n"
+        "We will check coverage at your new address and contact you within 24 hours.\n\n"
+        + _ACCOUNT_MENU_TEXT
+    )
+
+def _account_cancel(phone, text, data):
+    client_phone = data.get("client_phone", phone)
+    client = get_client_by_phone(client_phone)
+    if text.strip().upper() == "YES":
+        save_submission(phone, "cancel_request", {"name": client["name"] if client else ""})
+        notify(
+            f"🚨 <b>[CANCEL REQUEST]</b> from {client['name'] if client else phone}\n\n"
+            f"<b>Service:</b> {', '.join(s['name'] for s in (client.get('services') or []))}\n"
+            f"<b>Amount:</b> {client['package_amt'] if client else '?'}/month\n\n"
+            f"⚠️ Action required — contact client before cancelling."
+        )
+        set_session(phone, "DONE", {})
+        return (
+            "✅ *Cancellation request received.*\n\n"
+            "A Starcast team member will contact you within 24 hours to process your cancellation.\n\n"
+            "Type *hi* to return to the main menu."
+        )
+    else:
+        set_session(phone, "ACCOUNT_MENU", data)
+        return "No problem — your service continues as normal.\n\n" + _ACCOUNT_MENU_TEXT

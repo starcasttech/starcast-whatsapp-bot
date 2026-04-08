@@ -129,6 +129,21 @@ def verify_client(phone, id_number):
         return client
     return None
 
+def update_client_phone(old_phone, new_phone):
+    """Update a client's phone number (primary key — careful)."""
+    old_phone = _clean_phone(old_phone)
+    # Normalise new number: convert 08x → +278x
+    new_phone = new_phone.strip().replace(" ", "")
+    if new_phone.startswith("0"):
+        new_phone = "+27" + new_phone[1:]
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE clients SET phone=?, updated_at=? WHERE phone=?",
+            (new_phone, datetime.utcnow().isoformat(), old_phone)
+        )
+        conn.commit()
+    return new_phone
+
 def update_client_details(phone, name=None, email=None):
     """Update client name and/or email."""
     phone = _clean_phone(phone)
