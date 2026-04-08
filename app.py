@@ -22,12 +22,6 @@ def webhook():
 def health():
     return {"status": "ok", "service": "starcast-whatsapp-bot"}
 
-@app.route("/debug-client/<path:phone>", methods=["GET"])
-def debug_client(phone):
-    from db import get_client_by_phone, DB_PATH
-    client = get_client_by_phone(phone)
-    return {"db_path": DB_PATH, "phone": phone, "client": client}
-
 @app.route("/submissions", methods=["GET"])
 def submissions():
     from db import get_all_submissions
