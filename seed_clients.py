@@ -154,9 +154,9 @@ CLIENTS = [
         "name":        "Llewellyn Simpson",
         "email":       "simpson737@hotmail.com",
         "address":     "68 Lang Street, De Bakke, Mossel Bay, 6506",
-        "package_amt": "R1350",
+        "package_amt": "R0",
         "services":    [{"name": "Uncapped Frogfoot 1000/500Mbps", "provider": "Frogfoot", "amount": 1350}],
-        "vip": False, "paid": False,
+        "vip": True, "paid": True,
     },
     {
         "phone":       "+27829213451",
@@ -179,14 +179,14 @@ CLIENTS = [
         "vip": False, "paid": False,
     },
     {
-        "phone":       "+27692264213",
+        "phone":       "+27814911200",
         "id_number":   "8608050083080",
         "name":        "Adri Stoffels",
         "email":       "adricandice86@gmail.com",
         "address":     "32 Agter Straat, Pacaltsdorp, George, 6534",
-        "package_amt": "R640",
+        "package_amt": "R0",
         "services":    [{"name": "Uncapped Octotel 55/25Mbps", "provider": "Octotel", "amount": 640}],
-        "vip": False, "paid": False,
+        "vip": True, "paid": True,
     },
     {
         "phone":       "+27834621182",
@@ -204,9 +204,9 @@ CLIENTS = [
         "name":        "Jerome Ockhuis",
         "email":       "jockhuis@yahoo.com",
         "address":     "31 Robbe St, De Bakke, Mossel Bay, 6500",
-        "package_amt": "R640",
+        "package_amt": "R0",
         "services":    [{"name": "Uncapped Openserve 50/25Mbps", "provider": "Openserve", "amount": 640}],
-        "vip": False, "paid": False,
+        "vip": True, "paid": True,
     },
     {
         # VIP — Zoomfibre + MTN LTE, both fully discounted
