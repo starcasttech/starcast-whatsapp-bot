@@ -249,9 +249,9 @@ CLIENTS = [
         "name":        "Leonard Roelofse",
         "email":       "starcast.tech@gmail.com",
         "address":     "325 Dahlia, Grootbrak Rivier, Friemersheim, 6526",
-        "package_amt": "R1572",
+        "package_amt": "R0",
         "services":    [{"name": "Uncapped Octotel 300/200Mbps", "provider": "Octotel", "amount": 1572}],
-        "vip": False, "paid": False,
+        "vip": True, "paid": True,
     },
 ]
 
