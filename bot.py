@@ -1,4 +1,4 @@
-from db import get_session, set_session, save_submission, get_client_by_phone, verify_client, update_client_details
+from db import get_session, set_session, save_submission, get_client_by_phone, get_client_by_id, verify_client, update_client_details
 from notify import notify
 
 # ── Menu text ──────────────────────────────────────────────────────────────
@@ -122,18 +122,10 @@ def _menu(phone, text, data):
         set_session(phone, "SIGNUP_FIRSTNAME", {})
         return "🚀 *Sign Up for Starcast Internet*\n\nLet's get you connected! What is your *first name*?"
     elif text == "5":
-        client = get_client_by_phone(phone)
-        if not client:
-            set_session(phone, "DONE", {})
-            return (
-                "🔍 *My Account*\n\n"
-                "We could not find an account linked to this number.\n"
-                "Please contact us at starcast.tech@gmail.com or type *hi* for the main menu."
-            )
         set_session(phone, "ACCOUNT_VERIFY_ID", {})
         return (
-            "🔐 *My Account — Identity Verification*\n\n"
-            "To protect your account, please enter your *ID number*."
+            "🔐 *My Account*\n\n"
+            "Please enter your *ID number* to verify your account."
         )
     else:
         return "Please reply with a number 1-5.\n\n" + WELCOME
@@ -279,24 +271,23 @@ _ACCOUNT_MENU_TEXT = (
 )
 
 def _account_verify_id(phone, text, data):
-    client = verify_client(phone, text)
+    client = get_client_by_id(text)
     if not client:
-        # Give them one more chance then bail
         attempts = data.get("attempts", 0) + 1
         if attempts >= 2:
             set_session(phone, "DONE", {})
             return (
-                "❌ ID number did not match our records.\n"
+                "❌ ID number not found in our records.\n"
                 "Please contact us at starcast.tech@gmail.com\n\n"
                 "Type *hi* to start again."
             )
         set_session(phone, "ACCOUNT_VERIFY_ID", {"attempts": attempts})
-        return "❌ That ID number doesn't match our records. Please try again."
-    # Verified — store client phone in session for subsequent steps
-    set_session(phone, "ACCOUNT_MENU", {"verified_phone": phone})
+        return "❌ ID number not found. Please try again."
+    # Verified — store the client's DB phone so updates go to the right record
+    set_session(phone, "ACCOUNT_MENU", {"client_phone": client["phone"]})
     status = "✅ Paid" if client["paid"] else "⚠️ Unpaid"
     return (
-        f"✅ *Identity verified!*\n\n"
+        f"✅ *Verified!*\n\n"
         f"Welcome, {client['name'].split()[0]}!\n\n"
         f"📦 Package: {client['package_amt']}/month\n"
         f"💳 Status:  {status}\n\n"
@@ -304,7 +295,7 @@ def _account_verify_id(phone, text, data):
     )
 
 def _account_menu(phone, text, data):
-    client = get_client_by_phone(phone)
+    client = get_client_by_phone(data.get("client_phone", phone))
     if not client:
         set_session(phone, "DONE", {})
         return WELCOME
@@ -332,13 +323,15 @@ def _account_menu(phone, text, data):
         return "Please reply with 1, 2, 3 or 0.\n\n" + _ACCOUNT_MENU_TEXT
 
 def _account_update_name(phone, text, data):
-    update_client_details(phone, name=text)
-    notify(f"✏️ <b>[ACCOUNT]</b> Name updated for {phone}\n<b>New name:</b> {text}")
+    client_phone = data.get("client_phone", phone)
+    update_client_details(client_phone, name=text)
+    notify(f"✏️ <b>[ACCOUNT]</b> Name updated for {client_phone}\n<b>New name:</b> {text}")
     set_session(phone, "ACCOUNT_MENU", data)
     return f"✅ Name updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT
 
 def _account_update_email(phone, text, data):
-    update_client_details(phone, email=text)
-    notify(f"✏️ <b>[ACCOUNT]</b> Email updated for {phone}\n<b>New email:</b> {text}")
+    client_phone = data.get("client_phone", phone)
+    update_client_details(client_phone, email=text)
+    notify(f"✏️ <b>[ACCOUNT]</b> Email updated for {client_phone}\n<b>New email:</b> {text}")
     set_session(phone, "ACCOUNT_MENU", data)
     return f"✅ Email updated to *{text}*.\n\n" + _ACCOUNT_MENU_TEXT

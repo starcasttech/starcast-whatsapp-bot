@@ -100,6 +100,18 @@ def get_client_by_phone(phone):
                 "email": row[3], "package_amt": row[4], "paid": bool(row[5])}
     return None
 
+def get_client_by_id(id_number):
+    """Look up a client by ID number alone."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT phone, id_number, name, email, package_amt, paid FROM clients WHERE id_number = ?",
+            (id_number.strip(),)
+        ).fetchone()
+    if row:
+        return {"phone": row[0], "id_number": row[1], "name": row[2],
+                "email": row[3], "package_amt": row[4], "paid": bool(row[5])}
+    return None
+
 def verify_client(phone, id_number):
     """Return client dict if phone+ID match, else None."""
     phone = _clean_phone(phone)
