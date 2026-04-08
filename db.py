@@ -87,30 +87,39 @@ def _clean_phone(phone):
         p = "+" + p[1:]
     return p
 
+def _row_to_client(row):
+    if not row:
+        return None
+    return {
+        "phone":        row[0],
+        "id_number":    row[1],
+        "name":         row[2],
+        "email":        row[3],
+        "package_amt":  row[4],
+        "paid":         bool(row[5]),
+        "vip":          bool(row[6]),
+        "services":     json.loads(row[7]) if row[7] else [],
+        "paid_period":  row[8] or "",
+    }
+
 def get_client_by_phone(phone):
     """Look up a client by their WhatsApp phone number."""
     phone = _clean_phone(phone)
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT phone, id_number, name, email, package_amt, paid FROM clients WHERE phone = ?",
-            (phone,)
+            "SELECT phone,id_number,name,email,package_amt,paid,vip,services_json,paid_period "
+            "FROM clients WHERE phone = ?", (phone,)
         ).fetchone()
-    if row:
-        return {"phone": row[0], "id_number": row[1], "name": row[2],
-                "email": row[3], "package_amt": row[4], "paid": bool(row[5])}
-    return None
+    return _row_to_client(row)
 
 def get_client_by_id(id_number):
     """Look up a client by ID number alone."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT phone, id_number, name, email, package_amt, paid FROM clients WHERE id_number = ?",
-            (id_number.strip(),)
+            "SELECT phone,id_number,name,email,package_amt,paid,vip,services_json,paid_period "
+            "FROM clients WHERE id_number = ?", (id_number.strip(),)
         ).fetchone()
-    if row:
-        return {"phone": row[0], "id_number": row[1], "name": row[2],
-                "email": row[3], "package_amt": row[4], "paid": bool(row[5])}
-    return None
+    return _row_to_client(row)
 
 def verify_client(phone, id_number):
     """Return client dict if phone+ID match, else None."""

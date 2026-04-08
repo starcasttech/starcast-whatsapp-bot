@@ -270,6 +270,32 @@ _ACCOUNT_MENU_TEXT = (
     "Reply with a number"
 )
 
+def _format_account_summary(client):
+    """Build the account summary block shown after verification and on view."""
+    lines = [f"👤 *{client['name']}*\n"]
+
+    services = client.get("services", [])
+    if services:
+        lines.append("📋 *Your Services:*")
+        for s in services:
+            lines.append(f"  • {s['name']} — R{s['amount']}/month")
+        lines.append("")
+
+    if client["vip"]:
+        lines.append("💳 *Status: ✅ VIP — Nothing due*")
+    else:
+        total = client["package_amt"]
+        period = client.get("paid_period", "")
+        if client["paid"] and period:
+            lines.append(f"💳 *Status: ✅ Paid ({period})*")
+            lines.append(f"   Amount: {total}/month")
+        else:
+            lines.append(f"💳 *Status: ⚠️ Unpaid*")
+            lines.append(f"   Amount due: {total}")
+            lines.append(f"   Ref: use your ID number as payment reference")
+
+    return "\n".join(lines)
+
 def _account_verify_id(phone, text, data):
     client = get_client_by_id(text)
     if not client:
@@ -285,12 +311,9 @@ def _account_verify_id(phone, text, data):
         return "❌ ID number not found. Please try again."
     # Verified — store the client's DB phone so updates go to the right record
     set_session(phone, "ACCOUNT_MENU", {"client_phone": client["phone"]})
-    status = "✅ Paid" if client["paid"] else "⚠️ Unpaid"
     return (
-        f"✅ *Verified!*\n\n"
-        f"Welcome, {client['name'].split()[0]}!\n\n"
-        f"📦 Package: {client['package_amt']}/month\n"
-        f"💳 Status:  {status}\n\n"
+        f"✅ *Verified! Welcome, {client['name'].split()[0]}!*\n\n"
+        + _format_account_summary(client) + "\n\n"
         + _ACCOUNT_MENU_TEXT
     )
 
@@ -301,13 +324,9 @@ def _account_menu(phone, text, data):
         return WELCOME
 
     if text == "1":
-        status = "✅ Paid" if client["paid"] else "⚠️ Unpaid — please make your payment"
         return (
-            f"👤 *Account Details*\n\n"
-            f"Name:    {client['name']}\n"
-            f"Email:   {client['email'] or 'not on file'}\n"
-            f"Package: {client['package_amt']}/month\n"
-            f"Status:  {status}\n\n"
+            _format_account_summary(client) + "\n\n"
+            f"📧 Email: {client['email'] or 'not on file'}\n\n"
             + _ACCOUNT_MENU_TEXT
         )
     elif text == "2":
