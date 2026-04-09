@@ -1,7 +1,12 @@
-from db import get_session, set_session, save_submission, get_all_submissions, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone
+import os
+from db import get_session, set_session, save_submission, get_all_submissions, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone, _clean_phone
+from outages import check_isp, format_status, resolve_provider, OUTAGE_MENU
+from notify import notify
 
 ADMIN_PHONES = {"+27815082450"}  # Leonard — add more if needed
-from notify import notify
+_TWILIO_SID   = os.environ.get("TWILIO_SID", "")
+_TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN", "")
+_TWILIO_FROM  = "whatsapp:+27872502788"
 
 # ── Menu text ──────────────────────────────────────────────────────────────
 
@@ -12,8 +17,9 @@ WELCOME = (
     "2️⃣  Get a Quote\n"
     "3️⃣  General Question\n"
     "4️⃣  Sign Up\n"
-    "5️⃣  My Account\n\n"
-    "Reply with a number (1-5)"
+    "5️⃣  My Account\n"
+    "6️⃣  Check ISP Outages\n\n"
+    "Reply with a number (1-6)"
 )
 
 FIBRE_MENU = (
@@ -22,7 +28,7 @@ FIBRE_MENU = (
     "2️⃣  Frogfoot\n"
     "3️⃣  Octotel\n"
     "4️⃣  Not sure — check my coverage\n\n"
-    "Reply with a number (1-4)"
+    "Reply with a number (1-4) or *0* to go back"
 )
 
 LTE_MENU = (
@@ -30,7 +36,7 @@ LTE_MENU = (
     "1️⃣  MTN\n"
     "2️⃣  Vodacom\n"
     "3️⃣  Telkom\n\n"
-    "Reply with a number (1-3)"
+    "Reply with a number (1-3) or *0* to go back"
 )
 
 QUOTE_MENU = (
@@ -39,8 +45,9 @@ QUOTE_MENU = (
     "1️⃣  Fibre Internet\n"
     "2️⃣  LTE / Mobile Internet\n"
     "3️⃣  CCTV & Security Cameras\n"
-    "4️⃣  Gate & Garage Automation\n\n"
-    "Reply with a number (1-4)"
+    "4️⃣  Gate & Garage Automation\n"
+    "5️⃣  Solar & Backup Power\n\n"
+    "Reply with a number (1-5) or *0* to go back"
 )
 
 FIBRE_PROVIDER_MENU = (
@@ -52,7 +59,7 @@ FIBRE_PROVIDER_MENU = (
     "5️⃣  MetroFibre\n"
     "6️⃣  Zoomfibre\n"
     "7️⃣  Not sure\n\n"
-    "Reply with a number (1-7)"
+    "Reply with a number (1-7) or *0* to go back"
 )
 
 LTE_PROVIDER_MENU = (
@@ -61,14 +68,14 @@ LTE_PROVIDER_MENU = (
     "2️⃣  Vodacom\n"
     "3️⃣  Telkom\n"
     "4️⃣  Not sure — best in my area\n\n"
-    "Reply with a number (1-4)"
+    "Reply with a number (1-4) or *0* to go back"
 )
 
 CONN_MENU = (
     "What type of connection are you interested in?\n\n"
     "1️⃣  Fibre\n"
     "2️⃣  LTE / Mobile\n\n"
-    "Reply 1 or 2"
+    "Reply 1 or 2, or *0* to go back"
 )
 
 SUPPORT_MENU = (
@@ -79,13 +86,13 @@ SUPPORT_MENU = (
     "3️⃣  No WiFi signal\n"
     "4️⃣  Internet dropping\n"
     "5️⃣  Other\n\n"
-    "Reply with a number (1-5)"
+    "Reply with a number (1-5) or *0* to go back"
 )
 
 DONE_MSG = (
     "✅ Thanks! We've received your message.\n"
     "A Starcast team member will be in touch shortly.\n\n"
-    "Type *hi* to start again."
+    "Type *0* to return to the main menu."
 )
 
 SIGNUP_DONE = (
@@ -110,9 +117,13 @@ def handle_message(phone, body):
     text  = body.strip()
     state, data = get_session(phone)
 
-    # Admin command — Leonard only
+    # Admin commands — Leonard only
     if text.lower() == "!tasks":
         return _admin_tasks(phone)
+    if text.lower().startswith("!reply "):
+        return _admin_reply(phone, text)
+    if text.lower().startswith("!release "):
+        return _admin_release(phone, text)
 
     # Reset keywords always work
     if text.lower() in ("hi", "hello", "hey", "menu", "start", "0"):
@@ -152,6 +163,8 @@ def handle_message(phone, body):
         "ACCOUNT_UPDATE_PHONE":   _account_update_phone,
         "ACCOUNT_MOVE_LOCATION":  _account_move_location,
         "ACCOUNT_CANCEL":         _account_cancel,
+        "OUTAGE_CHECK":           _outage_check,
+        "LIVE_CHAT":              _live_chat,
         "DONE":                   _done,
     }
 
@@ -164,6 +177,17 @@ def handle_message(phone, body):
 def _idle(phone, text, data):
     set_session(phone, "MENU", {})
     return WELCOME
+
+def _outage_check(phone, text, data):
+    if text == "0":
+        set_session(phone, "MENU", {})
+        return WELCOME
+    provider = resolve_provider(text)
+    if not provider:
+        return "Please reply with a number 1-9.\n\n" + OUTAGE_MENU
+    result = check_isp(provider)
+    set_session(phone, "DONE", {})
+    return format_status(result)
 
 def _done(phone, text, data):
     set_session(phone, "MENU", {})
@@ -178,7 +202,11 @@ def _menu(phone, text, data):
         return QUOTE_MENU
     elif text == "3":
         set_session(phone, "GENERAL_QUESTION", {})
-        return "💬 *General Question*\n\nPlease type your question."
+        return (
+            "💬 *General Question*\n\n"
+            "Type your question and we'll get back to you.\n\n"
+            "Or type *live chat* to chat with an agent now."
+        )
     elif text == "4":
         set_session(phone, "SIGNUP_FIRSTNAME", {})
         return "🚀 *Sign Up for Starcast Internet*\n\nLet's get you connected! What is your *first name*?"
@@ -188,8 +216,11 @@ def _menu(phone, text, data):
             "🔐 *My Account*\n\n"
             "Please enter your *ID number* to verify your account."
         )
+    elif text == "6":
+        set_session(phone, "OUTAGE_CHECK", {})
+        return OUTAGE_MENU
     else:
-        return "Please reply with a number 1-5.\n\n" + WELCOME
+        return "Please reply with a number 1-6.\n\n" + WELCOME
 
 _SUPPORT_TYPES = {
     "1": "No internet",
@@ -266,14 +297,52 @@ def _submit_support(phone, data, client):
     )
 
 def _general_question(phone, text, data):
+    # Check if client wants live chat
+    live_chat_triggers = {"live chat", "chat", "agent", "speak to someone",
+                          "talk to someone", "human", "consultant"}
+    if text.lower().strip() in live_chat_triggers or "live chat" in text.lower():
+        set_session(phone, "LIVE_CHAT", {})
+        notify(
+            f"💬 <b>[LIVE CHAT REQUEST]</b>\n\n"
+            f"<b>From:</b> {_clean_phone(phone)}\n\n"
+            f"!reply {_clean_phone(phone)}\n"
+            f"!release {_clean_phone(phone)}"
+        )
+        return (
+            "✅ *You're connected!*\n\n"
+            "A Starcast agent has been notified and will be with you shortly.\n\n"
+            "Type your message and we'll respond as soon as possible.\n"
+            "Type *0* to return to the main menu."
+        )
+
+    # Regular general question
     data["question"] = text
     save_submission(phone, "general", data)
+    client = get_client_by_phone(phone)
+    name = client["name"] if client else phone
     notify(
-        f"💬 <b>[GENERAL]</b> Question from {phone}\n\n"
-        f"<b>Question:</b> {text}"
+        f"💬 <b>[GENERAL]</b> Question from <b>{name}</b>\n\n"
+        f"<b>Question:</b> {text}\n\n"
+        f"!reply {_clean_phone(phone)}"
     )
     set_session(phone, "DONE", {})
     return DONE_MSG
+
+
+def _live_chat(phone, text, data):
+    if text.strip() == "0":
+        set_session(phone, "MENU", {})
+        notify(f"💬 <b>[LIVE CHAT ENDED]</b> — {phone} returned to menu.")
+        return WELCOME
+    # Forward client message to Leonard via Telegram
+    client = get_client_by_phone(phone)
+    name = client["name"] if client else phone
+    notify(
+        f"💬 <b>[LIVE CHAT]</b> <b>{name}</b> says:\n\n"
+        f"{text}\n\n"
+        f"!reply {_clean_phone(phone)}\n!release {_clean_phone(phone)}"
+    )
+    return "✉️ Message received — agent will respond shortly."
 
 # ── Quote handlers ─────────────────────────────────────────────────────────
 
@@ -294,7 +363,11 @@ def _quote_menu(phone, text, data):
         data["quote_type"] = "Gate & Garage Automation"
         set_session(phone, "SECURITY_FIRSTNAME", data)
         return "🔧 *Gate & Garage Automation Quote*\n\nWhat is your *first name*?"
-    return "Please reply with a number 1-4.\n\n" + QUOTE_MENU
+    elif text == "5":
+        data["quote_type"] = "Solar & Backup Power"
+        set_session(phone, "SECURITY_FIRSTNAME", data)
+        return "☀️ *Solar & Backup Power Quote*\n\nWhat is your *first name*?"
+    return "Please reply with a number 1-5.\n\n" + QUOTE_MENU
 
 def _quote_fibre_provider(phone, text, data):
     providers = {"1": "Octotel", "2": "Openserve", "3": "Frogfoot",
@@ -630,3 +703,83 @@ def _admin_tasks(phone):
         lines.append(f"{icon} *{s['type'].replace('_',' ').title()}* — {name}\n   {detail} ({date})")
 
     return "\n\n".join(lines)
+
+
+# ── Live chat admin commands ───────────────────────────────────────────────
+
+def _admin_reply(admin_phone, text):
+    from db import _clean_phone
+    if _clean_phone(admin_phone) not in ADMIN_PHONES:
+        return "Unknown command."
+
+    # Format: !reply +27XXXXXXXXX message text here
+    parts = text.split(" ", 2)
+    if len(parts) < 3:
+        return "Usage: !reply +27XXXXXXXXX your message"
+
+    target_phone = parts[1].strip()
+    message      = parts[2].strip()
+    if not message:
+        return "Usage: !reply +27XXXXXXXXX your message"
+
+    # Send via Twilio
+    import urllib.request, urllib.parse, base64, json as _json
+    ACCOUNT_SID = _TWILIO_SID
+    AUTH_TOKEN  = _TWILIO_TOKEN
+    data = urllib.parse.urlencode({
+        "From": _TWILIO_FROM,
+        "To":   f"whatsapp:{target_phone}",
+        "Body": f"👤 *Starcast Agent:*\n\n{message}"
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json",
+        data=data, method="POST"
+    )
+    creds = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode()).decode()
+    req.add_header("Authorization", f"Basic {creds}")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            _json.loads(resp.read())
+        return f"✅ Sent to {target_phone}"
+    except Exception as e:
+        return f"❌ Failed to send: {e}"
+
+
+def _admin_release(admin_phone, text):
+    from db import _clean_phone
+    if _clean_phone(admin_phone) not in ADMIN_PHONES:
+        return "Unknown command."
+
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        return "Usage: !release +27XXXXXXXXX"
+
+    target_phone = parts[1].strip()
+    state, _ = get_session(target_phone)
+
+    if state != "LIVE_CHAT":
+        return f"⚠️ {target_phone} is not in a live chat session (state: {state})."
+
+    set_session(target_phone, "DONE", {})
+
+    # Notify the client
+    import urllib.request, urllib.parse, base64, json as _json
+    ACCOUNT_SID = _TWILIO_SID
+    AUTH_TOKEN  = _TWILIO_TOKEN
+    data = urllib.parse.urlencode({
+        "From": _TWILIO_FROM,
+        "To":   f"whatsapp:{target_phone}",
+        "Body": "✅ Thanks for chatting with Starcast! Type *hi* if you need anything else."
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json",
+        data=data, method="POST"
+    )
+    creds = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode()).decode()
+    req.add_header("Authorization", f"Basic {creds}")
+    try:
+        urllib.request.urlopen(req)
+    except Exception:
+        pass
+
+    return f"✅ Live chat with {target_phone} ended. Client notified."
