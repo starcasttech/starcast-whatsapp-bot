@@ -136,6 +136,7 @@ def handle_message(phone, body):
         "SUPPORT_TYPE":           _support_type,
         "SUPPORT_DESCRIBE":       _support_describe,
         "SUPPORT_VERIFY_ID":      _support_verify_id,
+        "SUPPORT_NAME":           _support_name,
         "QUOTE_MENU":             _quote_menu,
         "QUOTE_TYPE":             _quote_menu,        # legacy alias
         "QUOTE_ADDRESS":          _quote_address,
@@ -247,25 +248,16 @@ def _support_describe(phone, text, data):
 
 def _support_verify_id(phone, text, data):
     if text.strip() == "0":
-        _submit_support(phone, data, client=None)
-        set_session(phone, "DONE", {})
-        return (
-            "✅ *Fault logged.*\n\n"
-            "A consultant will call you back on this number as soon as possible.\n\n"
-            "Type *hi* to start again."
-        )
+        set_session(phone, "SUPPORT_NAME", data)
+        return "No problem. Please send us your *full name* so we can log the fault:"
     client = get_client_by_id(text)
     if not client:
         attempts = data.get("attempts", 0) + 1
         if attempts >= 2:
-            # Still submit without account — use phone number as contact
-            _submit_support(phone, data, client=None)
-            set_session(phone, "DONE", {})
+            set_session(phone, "SUPPORT_NAME", data)
             return (
-                "✅ *Fault logged.*\n\n"
-                "We could not find your account but your fault has been logged.\n"
-                "A consultant will call you back on this number as soon as possible.\n\n"
-                "Type *hi* to start again."
+                "❌ We could not find that ID number.\n\n"
+                "Please send us your *full name* so we can log the fault:"
             )
         data["attempts"] = attempts
         set_session(phone, "SUPPORT_VERIFY_ID", data)
@@ -276,7 +268,18 @@ def _support_verify_id(phone, text, data):
         f"✅ *Fault logged, {client['name'].split()[0]}!*\n\n"
         f"Issue: {data.get('issue_type', '')}\n\n"
         "A consultant will call you back as soon as possible.\n\n"
-        "Type *hi* to start again."
+        "Type *0* to return to the main menu."
+    )
+
+def _support_name(phone, text, data):
+    data["name"] = text.strip()
+    _submit_support(phone, data, client=None)
+    set_session(phone, "DONE", {})
+    return (
+        f"✅ *Fault logged, {text.strip().split()[0]}!*\n\n"
+        f"Issue: {data.get('issue_type', '')}\n\n"
+        "A consultant will call you back on this number as soon as possible.\n\n"
+        "Type *0* to return to the main menu."
     )
 
 def _submit_support(phone, data, client):
@@ -286,14 +289,15 @@ def _submit_support(phone, data, client):
         record["address"] = client.get("address", "")
         record["service"] = ", ".join(s["name"] for s in client.get("services", []))
     save_submission(phone, "support", record)
+    display_name = client["name"] if client else data.get("name", "Unknown")
     notify(
         f"🛠 <b>[SUPPORT]</b> Fault from "
-        f"<b>{client['name'] if client else 'Unknown'}</b>\n\n"
+        f"<b>{display_name}</b>\n\n"
         f"<b>Issue:</b> {data.get('issue_type', '?')}\n"
         f"<b>Description:</b> {data.get('description', '?')}\n"
         f"<b>Service:</b> {', '.join(s['name'] for s in client.get('services', [])) if client else 'unknown'}\n"
         f"<b>Address:</b> {client.get('address', 'unknown') if client else 'unknown'}\n"
-        f"<b>Call back:</b> {phone}"
+        f"<b>Call back:</b> {_clean_phone(phone)}"
     )
 
 def _general_question(phone, text, data):
