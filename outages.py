@@ -2,8 +2,9 @@
 Live ISP outage checker for South African providers.
 
 Primary sources (free JSON, no auth):
-  - status.atomic.co.za   → Octotel, Frogfoot, Openserve, Vumatel
-  - netnotice.rsaweb.co.za → MetroFibre, Frogfoot, Octotel, Openserve
+  - status.octotel.co.za  → Octotel (direct, region-level detail)
+  - status.atomic.co.za   → Frogfoot, Openserve, Vumatel
+  - netnotice.rsaweb.co.za → MetroFibre, Frogfoot, Openserve
 
 Fallback (Brave Search) for: Zoomfibre, MTN, Vodacom, Telkom
 """
@@ -21,10 +22,11 @@ BRAVE_KEY = os.environ.get("BRAVE_KEY", "")
 
 ATOMIC  = "https://status.atomic.co.za"
 RSAWEB  = "https://netnotice.rsaweb.co.za"
+OCTOTEL = "https://status.octotel.co.za"
 
 # Which sources carry which ISP (lowercase match against component names)
 ISP_SOURCES = {
-    "octotel":    [ATOMIC, RSAWEB],
+    "octotel":    [OCTOTEL],        # Use Octotel's own page (region-level detail)
     "openserve":  [ATOMIC, RSAWEB],
     "frogfoot":   [ATOMIC, RSAWEB],
     "metrofibre": [RSAWEB],
@@ -119,30 +121,41 @@ def check_isp(isp_name: str) -> dict:
         seen_ids = set()
         for base in sources:
             components = _get_components(base)
+            # Octotel's own page: every component is an Octotel region — match all
+            # Other sources: match by ISP name in component name
+            direct = (base == OCTOTEL and key == "octotel")
             for comp in components:
-                if key in comp.get("name", "").lower():
-                    component_statuses.append(comp.get("status", "UNKNOWN"))
-                    # Extract incidents/maintenances embedded in the component
+                name_match = direct or key in comp.get("name", "").lower()
+                if name_match:
+                    status_val = comp.get("status", "UNKNOWN")
+                    # For direct pages, only count non-group (leaf) components
+                    is_group = comp.get("group") is None and any(
+                        c.get("group", {}) and c["group"].get("id") == comp.get("id")
+                        for c in components
+                    )
+                    if not is_group:
+                        component_statuses.append(status_val)
+                    # Extract embedded incidents/maintenances
                     for inc in comp.get("activeIncidents", []):
                         if inc.get("id") not in seen_ids:
                             seen_ids.add(inc.get("id"))
-                            incidents.append(inc)
+                            incidents.append(_clean_event(inc, isp_name))
                     for maint in comp.get("activeMaintenances", []):
                         if maint.get("id") not in seen_ids:
                             seen_ids.add(maint.get("id"))
-                            maintenances.append(maint)
+                            maintenances.append(_clean_event(maint, isp_name))
 
-        # Also pull from Atomic summary.json (catches incidents not on component level)
-        if ATOMIC in sources:
-            summary = _get_summary(ATOMIC)
+        # Pull from the source's summary.json (catches events not embedded in components)
+        for base in sources:
+            summary = _get_summary(base)
             for m in summary.get("activeMaintenances", []):
-                if key in m.get("name", "").lower() and m.get("id") not in seen_ids:
+                if (key in m.get("name", "").lower() or base == OCTOTEL) and m.get("id") not in seen_ids:
                     seen_ids.add(m.get("id"))
-                    maintenances.append(m)
+                    maintenances.append(_clean_event(m, isp_name))
             for i in summary.get("activeIncidents", []):
-                if key in i.get("name", "").lower() and i.get("id") not in seen_ids:
+                if (key in i.get("name", "").lower() or base == OCTOTEL) and i.get("id") not in seen_ids:
                     seen_ids.add(i.get("id"))
-                    incidents.append(i)
+                    incidents.append(_clean_event(i, isp_name))
 
         status = _worst(component_statuses) if component_statuses else "UNKNOWN"
 
@@ -198,6 +211,19 @@ def _brave_search_status(isp_name: str) -> dict:
             "maintenances": [],
             "source":       "search",
         }
+
+
+def _clean_event(event: dict, isp_name: str) -> dict:
+    """Strip third-party ISP prefixes from event names (e.g. 'RSAWEB Network Notice | ')."""
+    import re
+    event = dict(event)
+    name = event.get("name", "")
+    # Remove patterns like "RSAWEB Network Notice | " or "RSAWEB ... | "
+    name = re.sub(r'^RSAWEB[^|]*\|\s*', '', name).strip()
+    # Remove "Octotel - " prefix if ISP name is already shown in header
+    name = re.sub(r'^Octotel\s*[-–]\s*', '', name, flags=re.IGNORECASE).strip()
+    event["name"] = name
+    return event
 
 
 def _format_event(event) -> str:
