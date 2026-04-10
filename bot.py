@@ -2,6 +2,7 @@ import os
 from db import get_session, set_session, save_submission, get_all_submissions, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone, _clean_phone
 from outages import check_isp, format_status, resolve_provider, OUTAGE_MENU
 from notify import notify
+from ai_assistant import ask as ai_ask
 
 ADMIN_PHONES = {"+27815082450"}  # Leonard — add more if needed
 _TWILIO_SID   = os.environ.get("TWILIO_SID", "")
@@ -319,18 +320,30 @@ def _general_question(phone, text, data):
             "Type *0* to return to the main menu."
         )
 
-    # Regular general question
+    # Regular general question — try AI first
     data["question"] = text
-    save_submission(phone, "general", data)
     client = get_client_by_phone(phone)
-    name = client["name"] if client else phone
-    notify(
-        f"💬 <b>[GENERAL]</b> Question from <b>{name}</b>\n\n"
-        f"<b>Question:</b> {text}\n\n"
-        f"!reply {_clean_phone(phone)}"
-    )
-    set_session(phone, "DONE", {})
-    return DONE_MSG
+    name = client["name"].split()[0] if client else "there"
+
+    ai = ai_ask(text, client_name=name)
+
+    if ai["answered"]:
+        # AI handled it — log silently, no Telegram ping needed
+        save_submission(phone, "general", data)
+        set_session(phone, "DONE", {})
+        return ai["reply"]
+    else:
+        # AI couldn't answer or flagged for escalation — hand to Leonard
+        save_submission(phone, "general", data)
+        full_name = client["name"] if client else phone
+        notify(
+            f"💬 <b>[GENERAL]</b> Question from <b>{full_name}</b>\n\n"
+            f"<b>Question:</b> {text}\n\n"
+            f"<i>AI reason: {ai['reason']}</i>\n\n"
+            f"!reply {_clean_phone(phone)}"
+        )
+        set_session(phone, "DONE", {})
+        return DONE_MSG
 
 
 def _live_chat(phone, text, data):
