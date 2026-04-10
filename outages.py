@@ -116,20 +116,32 @@ def check_isp(isp_name: str) -> dict:
         incidents     = []
         maintenances  = []
 
+        seen_ids = set()
         for base in sources:
             components = _get_components(base)
             for comp in components:
                 if key in comp.get("name", "").lower():
                     component_statuses.append(comp.get("status", "UNKNOWN"))
+                    # Extract incidents/maintenances embedded in the component
+                    for inc in comp.get("activeIncidents", []):
+                        if inc.get("id") not in seen_ids:
+                            seen_ids.add(inc.get("id"))
+                            incidents.append(inc)
+                    for maint in comp.get("activeMaintenances", []):
+                        if maint.get("id") not in seen_ids:
+                            seen_ids.add(maint.get("id"))
+                            maintenances.append(maint)
 
-        # Detailed incidents/maintenances from Atomic (richest data)
+        # Also pull from Atomic summary.json (catches incidents not on component level)
         if ATOMIC in sources:
             summary = _get_summary(ATOMIC)
             for m in summary.get("activeMaintenances", []):
-                if key in m.get("name", "").lower():
+                if key in m.get("name", "").lower() and m.get("id") not in seen_ids:
+                    seen_ids.add(m.get("id"))
                     maintenances.append(m)
             for i in summary.get("activeIncidents", []):
-                if key in i.get("name", "").lower():
+                if key in i.get("name", "").lower() and i.get("id") not in seen_ids:
+                    seen_ids.add(i.get("id"))
                     incidents.append(i)
 
         status = _worst(component_statuses) if component_statuses else "UNKNOWN"
@@ -193,7 +205,7 @@ def _format_event(event) -> str:
     if isinstance(event, str):
         return f"  • {event}"
     name     = event.get("name", "Unknown")
-    start_str= event.get("start", "")
+    start_str= event.get("start", "") or event.get("started", "")
     duration = event.get("duration")   # minutes
     status   = event.get("status", "")
 
@@ -271,6 +283,9 @@ def format_status(result: dict) -> str:
 
     if status == "OPERATIONAL" and not result["incidents"] and not result["maintenances"]:
         lines.append("No active incidents or maintenance reported.")
+    elif status not in ("OPERATIONAL", "UNKNOWN") and not result["incidents"] and not result["maintenances"]:
+        lines.append("⚠️ The network status feed shows an issue but no detailed incident report has been published by this provider yet.")
+        lines.append("Please check back shortly or contact Starcast for assistance.")
 
     lines.append("\n_Source: live network status feed_")
     lines.append("Type *hi* to return to the menu.")
