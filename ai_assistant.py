@@ -3,6 +3,7 @@ AI assistant for Starcast WhatsApp bot.
 Uses Amazon Nova Micro via AWS Bedrock — cheap, fast, no extra API keys.
 Answers general customer questions automatically.
 Escalates to Leonard for account/billing/sensitive issues.
+Also drives step-by-step technical troubleshooting for internet faults.
 """
 
 import os
@@ -81,6 +82,90 @@ def _get_bedrock_client():
         )
     # Fall back to instance profile / env credentials
     return boto3.client("bedrock-runtime", region_name=AWS_REGION)
+
+
+_TROUBLESHOOT_PROMPT = """You are a technical support assistant for Starcast Technologies, a South African ISP reseller.
+Your job is to guide a customer through troubleshooting their internet connection via WhatsApp.
+
+EQUIPMENT IN SA:
+- ONT (Optical Network Terminal) = the white/grey box where the fibre cable enters the house. Has indicator lights.
+- Router = the WiFi device (often a separate unit from the ONT, sometimes combined).
+- Common ONT brands: ZTE, Huawei, Nokia/Alcatel-Lucent.
+
+ONT LIGHTS (typical SA setup):
+- PWR (Power) — must be solid green
+- LOS / LOS (Loss of Signal) — must be OFF. If RED/blinking = fibre signal problem, likely ISP or cable issue
+- PON / GPON — solid green = connected to exchange
+- LAN / DATA — blinking = traffic flowing (good sign)
+- INTERNET / SVC — solid green = authenticated and online
+
+REBOOT SEQUENCE (always do ONT first):
+1. Unplug ONT power → wait 30 seconds → plug back in → wait 2 minutes
+2. Then reboot router → wait 1 minute
+3. Test connection
+
+RULES:
+- Give ONE concise troubleshooting step per response
+- Use plain text (no markdown headers). Bold with *asterisks* for WhatsApp.
+- Keep it SHORT — max 5 lines. This is WhatsApp.
+- Step 1 = gentlest fix (reboot sequence / check lights)
+- Step 2 = deeper check (cable connections, reset to defaults, isolate ONT vs router)
+- Always end step with: "Did that fix it? Reply *yes* or *no*"
+- If ISP has an outage, mention it briefly at the start so the customer knows it may not be their fault.
+- Do NOT suggest calling Leonard or logging a fault — that happens automatically if steps fail."""
+
+
+def troubleshoot(issue_type: str, description: str, isp_name: str,
+                 step: int, outage_status: str = None) -> str:
+    """
+    Generate a troubleshooting step for a customer internet fault.
+
+    Returns a WhatsApp-ready string (or empty string on error).
+    """
+    try:
+        bedrock = _get_bedrock_client()
+
+        outage_note = ""
+        if outage_status and outage_status not in ("OPERATIONAL", "UNKNOWN", "NOREPORTS", None):
+            outage_note = f"\nNOTE: {isp_name} is currently showing a network issue ({outage_status}). Mention this briefly."
+
+        user_msg = (
+            f"Issue type: {issue_type}\n"
+            f"Customer description: {description}\n"
+            f"ISP / fibre provider: {isp_name or 'unknown'}\n"
+            f"Troubleshooting step to generate: {step} of 2{outage_note}"
+        )
+
+        response = bedrock.converse(
+            modelId=MODEL_ID,
+            system=[{"text": _TROUBLESHOOT_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": user_msg}]}],
+            inferenceConfig={"maxTokens": 250, "temperature": 0.3},
+        )
+
+        return response["output"]["message"]["content"][0]["text"].strip()
+
+    except Exception:
+        # Fallback hardcoded steps if AI fails
+        if step == 1:
+            outage_prefix = f"⚠️ Note: {isp_name} may have a network issue in your area right now.\n\n" if outage_status not in ("OPERATIONAL", "UNKNOWN", "NOREPORTS", None) else ""
+            return (
+                f"{outage_prefix}"
+                "Let's start with a full reboot:\n\n"
+                "*1.* Unplug your ONT (fibre box) → wait 30 sec → plug back in → wait 2 min\n"
+                "*2.* Then reboot your router → wait 1 min\n"
+                "*3.* Test your connection\n\n"
+                "Did that fix it? Reply *yes* or *no*"
+            )
+        else:
+            return (
+                "Check the lights on your ONT (fibre box):\n\n"
+                "• *PWR* — solid green ✅\n"
+                "• *LOS* — must be OFF. If red/blinking = signal problem on ISP side 🔴\n"
+                "• *PON/GPON* — solid green = connected ✅\n\n"
+                "Also check all cables are firmly plugged in.\n\n"
+                "Did that fix it? Reply *yes* or *no*"
+            )
 
 
 def ask(question: str, client_name: str = "Dear client") -> dict:
