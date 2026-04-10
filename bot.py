@@ -325,7 +325,7 @@ def _support_troubleshoot(phone, text, data):
         return (
             f"📋 *Fault logged, {client['name'].split()[0]}.*\n\n"
             "The basic steps didn't resolve it — we'll take it from here.\n"
-            "Leonard will contact you directly to sort it out.\n\n"
+            "A Starcast agent will contact you directly to sort it out.\n\n"
             "Type *0* to return to the main menu."
         )
     else:
