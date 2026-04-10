@@ -2,7 +2,12 @@ import os
 from db import get_session, set_session, save_submission, get_all_submissions, get_client_by_phone, get_client_by_id, verify_client, update_client_details, update_client_phone, _clean_phone
 from outages import check_isp, format_status, resolve_provider, OUTAGE_MENU
 from notify import notify
-from ai_assistant import ask as ai_ask, troubleshoot as ai_troubleshoot
+from ai_assistant import ask as ai_ask
+from troubleshoot import (
+    ISP_MENU, ISP_MAP, LTE_ISPS,
+    get_lights_prompt,
+    interpret_lights, interpret_lte_lights, format_outage_note,
+)
 
 ADMIN_PHONES = {"+27815082450"}  # Leonard — add more if needed
 _TWILIO_SID   = os.environ.get("TWILIO_SID", "")
@@ -136,7 +141,9 @@ def handle_message(phone, body):
         "MENU":                   _menu,
         "SUPPORT_TYPE":           _support_type,
         "SUPPORT_DESCRIBE":       _support_describe,
-        "SUPPORT_TROUBLESHOOT":   _support_troubleshoot,
+        "SUPPORT_GET_ISP":        _support_get_isp,
+        "SUPPORT_GET_LIGHTS":     _support_get_lights,
+        "SUPPORT_POST_REBOOT":    _support_post_reboot,
         "SUPPORT_VERIFY_ID":      _support_verify_id,
         "SUPPORT_NAME":           _support_name,
         "QUOTE_MENU":             _quote_menu,
@@ -240,62 +247,93 @@ def _support_type(phone, text, data):
     set_session(phone, "SUPPORT_DESCRIBE", data)
     return "Please briefly *describe your problem*:"
 
+def _extract_isp_from_client(client) -> str:
+    """Pull ISP name from a client's services list."""
+    if not client:
+        return ""
+    _caps = {
+        "octotel": "Octotel", "openserve": "Openserve", "frogfoot": "Frogfoot",
+        "metrofibre": "MetroFibre", "vumatel": "Vumatel", "vuma": "Vumatel",
+        "zoomfibre": "Zoomfibre", "mtn": "MTN", "vodacom": "Vodacom", "telkom": "Telkom",
+    }
+    for svc in client.get("services", []):
+        svc_lower = svc.get("name", "").lower()
+        for kw, canonical in _caps.items():
+            if kw in svc_lower:
+                return canonical
+    return ""
+
+
+def _check_outage(isp_name: str) -> dict:
+    """Return outage result dict or empty dict on error."""
+    if not isp_name or isp_name == "Not sure":
+        return {}
+    try:
+        return check_isp(isp_name)
+    except Exception:
+        return {}
+
+
 def _support_describe(phone, text, data):
     data["description"] = text
 
-    # Try to find the customer's ISP from their account
-    client = get_client_by_phone(phone)
-    isp_name = ""
-    if client:
-        services = client.get("services", [])
-        # services is a list of dicts with "name" field, e.g. "Octotel 300/200Mbps"
-        isp_keywords = ["octotel", "openserve", "frogfoot", "metrofibre", "vumatel",
-                        "vuma", "zoomfibre", "mtn", "vodacom", "telkom"]
-        for svc in services:
-            svc_lower = svc.get("name", "").lower()
-            for kw in isp_keywords:
-                if kw in svc_lower:
-                    isp_name = kw.capitalize()
-                    # Fix capitalisation for multi-word names
-                    _isp_caps = {"Metrofibre": "MetroFibre", "Zoomfibre": "Zoomfibre",
-                                 "Vumatel": "Vumatel", "Openserve": "Openserve",
-                                 "Frogfoot": "Frogfoot", "Octotel": "Octotel",
-                                 "Mtn": "MTN", "Vodacom": "Vodacom", "Telkom": "Telkom"}
-                    isp_name = _isp_caps.get(isp_name, isp_name)
-                    break
-            if isp_name:
-                break
+    # Look up client to get their ISP
+    client   = get_client_by_phone(phone)
+    isp_name = _extract_isp_from_client(client)
 
-    # Check ISP outage status
-    outage_status = None
     if isp_name:
-        try:
-            result = check_isp(isp_name)
-            outage_status = result.get("status")
-        except Exception:
-            pass
+        # We know their ISP — check outage and go straight to lights
+        outage = _check_outage(isp_name)
+        data["isp_name"]     = isp_name
+        data["outage_status"] = outage.get("status", "")
+        set_session(phone, "SUPPORT_GET_LIGHTS", data)
+        outage_note = format_outage_note(outage)
+        return outage_note + get_lights_prompt(isp_name, is_lte=isp_name in LTE_ISPS)
+    else:
+        # Unknown ISP — ask before checking
+        data["isp_name"]      = ""
+        data["outage_status"] = ""
+        set_session(phone, "SUPPORT_GET_ISP", data)
+        return ISP_MENU
 
+
+def _support_get_isp(phone, text, data):
+    isp_name = ISP_MAP.get(text.strip())
+    if not isp_name:
+        return "Please reply with a number 1-10.\n\n" + ISP_MENU
+
+    outage = _check_outage(isp_name)
     data["isp_name"]      = isp_name
-    data["outage_status"] = outage_status
-    data["ts_step"]       = 1
-
-    step1 = ai_troubleshoot(
-        data.get("issue_type", ""),
-        text,
-        isp_name,
-        step=1,
-        outage_status=outage_status,
-    )
-
-    set_session(phone, "SUPPORT_TROUBLESHOOT", data)
-    return f"🛠 *Step 1 — Let's try this first:*\n\n{step1}"
+    data["outage_status"] = outage.get("status", "")
+    set_session(phone, "SUPPORT_GET_LIGHTS", data)
+    outage_note = format_outage_note(outage)
+    return outage_note + get_lights_prompt(isp_name, is_lte=isp_name in LTE_ISPS)
 
 
-def _support_troubleshoot(phone, text, data):
+def _support_get_lights(phone, text, data):
+    """Receive light description → interpret → give reboot steps."""
+    isp_name = data.get("isp_name", "")
+    is_lte   = isp_name in LTE_ISPS
+
+    if is_lte:
+        diagnosis = interpret_lte_lights(text, isp_name)
+    else:
+        diagnosis = interpret_lights(text, isp_name)
+
+    data["lights_description"] = text
+    set_session(phone, "SUPPORT_POST_REBOOT", data)
+    return f"🛠 *Diagnosis:*\n\n{diagnosis}"
+
+
+def _support_post_reboot(phone, text, data):
+    """Customer replies done/yes/no after reboot attempt."""
     reply = text.strip().lower()
-    step  = data.get("ts_step", 1)
 
-    if reply in ("yes", "y", "fixed", "sorted", "working", "ok", "it works"):
+    # "Done" means they finished the reboot — now ask if it worked
+    if reply in ("done", "finished", "ok", "okay", "ready"):
+        return "Did that fix your connection? Reply *yes* or *no*."
+
+    if reply in ("yes", "y", "fixed", "sorted", "working", "it works", "all good"):
         set_session(phone, "DONE", {})
         return (
             "✅ *Great, glad that sorted it!*\n\n"
@@ -303,64 +341,26 @@ def _support_troubleshoot(phone, text, data):
             "Type *0* to return to the main menu."
         )
 
-    if step == 1:
-        # Give step 2
-        step2 = ai_troubleshoot(
-            data.get("issue_type", ""),
-            data.get("description", ""),
-            data.get("isp_name", ""),
-            step=2,
-            outage_status=data.get("outage_status"),
-        )
-        data["ts_step"] = 2
-        set_session(phone, "SUPPORT_TROUBLESHOOT", data)
-        return f"🛠 *Step 2 — Try this:*\n\n{step2}"
-
-    # Step 2 also failed — escalate to Leonard
-    # Check if we already know the client
+    # Still broken — escalate
     client = get_client_by_phone(phone)
     if client:
-        _submit_support_with_ts(phone, data, client)
+        _submit_support(phone, data, client)
         set_session(phone, "DONE", {})
+        first = client["name"].split()[0]
         return (
-            f"📋 *Fault logged, {client['name'].split()[0]}.*\n\n"
-            "The basic steps didn't resolve it — we'll take it from here.\n"
-            "A Starcast agent will contact you directly to sort it out.\n\n"
+            f"📋 *Fault logged, {first}.*\n\n"
+            "The troubleshooting steps did not resolve it — we will take it from here.\n"
+            "A Starcast agent will be in contact with you shortly.\n\n"
             "Type *0* to return to the main menu."
         )
     else:
-        # Ask for ID to identify them
         set_session(phone, "SUPPORT_VERIFY_ID", data)
         return (
-            "📋 We'll log this for you.\n\n"
-            "Please enter your *ID number* so we can pull up your account\n"
-            "and have a consultant call you back.\n\n"
-            "Type *0* to skip and just use your WhatsApp number."
+            "📋 We will log this fault for you.\n\n"
+            "Please enter your *ID number* so we can pull up your account "
+            "and have someone call you back.\n\n"
+            "Type *0* to skip — we will use your WhatsApp number instead."
         )
-
-
-def _submit_support_with_ts(phone, data, client):
-    """Submit support ticket including troubleshooting history."""
-    record = {**data, "whatsapp": phone}
-    if client:
-        record["name"]    = client["name"]
-        record["address"] = client.get("address", "")
-        record["service"] = ", ".join(s["name"] for s in client.get("services", []))
-    save_submission(phone, "support", record)
-    display_name = client["name"] if client else data.get("name", "Unknown")
-    isp_note = f"\n<b>ISP:</b> {data.get('isp_name', 'unknown')}" if data.get("isp_name") else ""
-    outage_note = f"\n<b>Outage status:</b> {data.get('outage_status', 'N/A')}" if data.get("outage_status") else ""
-    notify(
-        f"🛠 <b>[SUPPORT — UNRESOLVED]</b> Fault from "
-        f"<b>{display_name}</b>\n\n"
-        f"<b>Issue:</b> {data.get('issue_type', '?')}\n"
-        f"<b>Description:</b> {data.get('description', '?')}\n"
-        f"<b>Service:</b> {', '.join(s['name'] for s in client.get('services', [])) if client else 'unknown'}\n"
-        f"<b>Address:</b> {client.get('address', 'unknown') if client else 'unknown'}"
-        f"{isp_note}{outage_note}\n"
-        f"<i>⚠️ 2 troubleshoot steps failed — needs manual intervention</i>\n"
-        f"<b>Call back:</b> {_clean_phone(phone)}"
-    )
 
 
 def _support_verify_id(phone, text, data):
@@ -407,17 +407,18 @@ def _submit_support(phone, data, client):
         record["service"] = ", ".join(s["name"] for s in client.get("services", []))
     save_submission(phone, "support", record)
     display_name = client["name"] if client else data.get("name", "Unknown")
-    isp_note     = f"\n<b>ISP:</b> {data['isp_name']}" if data.get("isp_name") else ""
-    outage_note  = f"\n<b>Outage status:</b> {data['outage_status']}" if data.get("outage_status") else ""
-    ts_note      = "\n<i>⚠️ 2 troubleshoot steps failed — needs manual intervention</i>" if data.get("ts_step", 0) >= 2 else ""
+    isp_note    = f"\n<b>ISP:</b> {data['isp_name']}" if data.get("isp_name") else ""
+    outage_note = f"\n<b>Outage status:</b> {data['outage_status']}" if data.get("outage_status") else ""
+    lights_note = f"\n<b>ONT lights:</b> {data['lights_description']}" if data.get("lights_description") else ""
     notify(
-        f"🛠 <b>[SUPPORT]</b> Fault from "
+        f"🛠 <b>[SUPPORT — UNRESOLVED]</b> Fault from "
         f"<b>{display_name}</b>\n\n"
         f"<b>Issue:</b> {data.get('issue_type', '?')}\n"
         f"<b>Description:</b> {data.get('description', '?')}\n"
         f"<b>Service:</b> {', '.join(s['name'] for s in client.get('services', [])) if client else 'unknown'}\n"
         f"<b>Address:</b> {client.get('address', 'unknown') if client else 'unknown'}"
-        f"{isp_note}{outage_note}{ts_note}\n"
+        f"{isp_note}{outage_note}{lights_note}\n"
+        f"<i>Self-service troubleshooting exhausted — needs manual follow-up</i>\n"
         f"<b>Call back:</b> {_clean_phone(phone)}"
     )
 
